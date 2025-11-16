@@ -1,0 +1,13 @@
+# Pasta do Ambiente Virtual
+venv/
+
+# Arquivos gerados pelo Treinamento
+assets/
+
+# Pastas de cache do Python
+__pycache__/
+*.pyc
+
+# Arquivos de sistema (Mac/Windows)
+.DS_Store
+Thumbs.db
