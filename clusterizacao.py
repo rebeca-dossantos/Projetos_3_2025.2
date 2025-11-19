@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
-from sklearn.cluster import KMeans, DBSCAN
+from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
@@ -17,7 +17,7 @@ warnings.filterwarnings('ignore')
 # Carregar os dados
 df = pd.read_csv('database.csv')
 
-# PRÉ-PROCESSAMENTO COMPLETO
+# PRÉ‑PROCESSAMENTO COMPLETO
 # 1. Transformação da variável alvo
 df = df.rename(columns={'Diabetes_012': 'Diabetes_binary'})
 df['Diabetes_binary'] = df['Diabetes_binary'].replace({2: 1})
@@ -39,11 +39,10 @@ binary_col = [col for col in df.columns if df[col].nunique() == 2 and col != tar
 num_col = [col for col in df.columns.difference(binary_col) if col != target]
 
 # 4. Preparação para clusterização
-# Selecionar features mais relevantes para clusterização
 cluster_features = ['BMI', 'Age', 'GenHlth', 'PhysHlth', 'MentHlth', 'HighBP', 'HighChol']
 X_cluster = df[cluster_features]
 
-# Padronizar os dados para clusterização
+# Padronizar os dados
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X_cluster)
 
@@ -51,23 +50,33 @@ X_scaled = scaler.fit_transform(X_cluster)
 pca = PCA(n_components=2)
 X_pca = pca.fit_transform(X_scaled)
 
-# Encontrar número ótimo de clusters
+# Amostragem para silhouette_score
+if X_scaled.shape[0] > 10000:
+    sampled_idx = np.random.choice(X_scaled.shape[0], 10000, replace=False)
+    X_sampled = X_scaled[sampled_idx]
+else:
+    X_sampled = X_scaled
+
+# Encontrar número ótimo de clusters (até k=20)
 wcss = []
 silhouette_scores = []
-k_range = range(2, 8)
+k_range = range(2, 21)
 
 for k in k_range:
     kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
     kmeans.fit(X_scaled)
     wcss.append(kmeans.inertia_)
-    silhouette_scores.append(silhouette_score(X_scaled, kmeans.labels_))
+    silhouette = silhouette_score(X_sampled, kmeans.predict(X_sampled))
+    silhouette_scores.append(silhouette)
 
-# Clusterização final com K ótimo
-optimal_k = 4  # Baseado na análise do cotovelo e silhouette
+# Definir K como 20 (ou ajuste conforme necessário)
+optimal_k = 20
+
+# Clusterização final com K=20
 kmeans_final = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
 df['Cluster'] = kmeans_final.fit_predict(X_scaled)
 
-# Adicionar coordenadas PCA ao dataframe
+# Adicionar coordenadas PCA no dataframe
 df['PCA1'] = X_pca[:, 0]
 df['PCA2'] = X_pca[:, 1]
 
@@ -75,7 +84,7 @@ df['PCA2'] = X_pca[:, 1]
 app = dash.Dash(__name__)
 server = app.server
 
-# Layout do app expandido
+# Layout do app
 app.layout = html.Div([
     html.H1("Análise Exploratória de Dados - Indicadores de Saúde para Diabetes", 
             style={'textAlign': 'center', 'color': '#2c3e50', 'marginBottom': 30}),
@@ -218,147 +227,19 @@ app.layout = html.Div([
         html.H2("7. Modelo Preditivo", style={'color': '#3498db', 'borderBottom': '2px solid #3498db', 'paddingBottom': 10}),
         
         html.Div([
-            html.Div([
-                html.H4("Desempenho do Modelo Gradient Boosting"),
-                html.Div(id='model-metrics')
-            ], className="six columns"),
-            
-            html.Div([
-                dcc.Graph(id='confusion-matrix')
-            ], className="six columns"),
-        ], className="row")
-    ], style={'padding': 20, 'backgroundColor': 'white', 'borderRadius': 10, 'marginBottom': 20}),
-    
+            html.H4("Desempenho do Modelo Gradient Boosting"),
+            html.Div(id='model-metrics')
+        ], className="six columns"),
+        
+        html.Div([
+            dcc.Graph(id='confusion-matrix')
+        ], className="six columns"),
+    ], className="row")
 ], style={'padding': 20, 'backgroundColor': '#ecf0f1', 'fontFamily': 'Arial, sans-serif'})
 
-# Callbacks para Clusterização
+# CALLBACKS
 
-@app.callback(
-    Output('cluster-plot', 'figure'),
-    Input('cluster-plot', 'id')
-)
-def update_cluster_plot(_):
-    fig = px.scatter(
-        df, x='PCA1', y='PCA2', color='Cluster',
-        title='Visualização dos Clusters (PCA)',
-        labels={'PCA1': f'Componente Principal 1 ({pca.explained_variance_ratio_[0]:.1%})',
-                'PCA2': f'Componente Principal 2 ({pca.explained_variance_ratio_[1]:.1%})'},
-        color_continuous_scale='viridis'
-    )
-    fig.update_layout(template='plotly_white')
-    return fig
-
-@app.callback(
-    Output('elbow-plot', 'figure'),
-    Input('elbow-plot', 'id')
-)
-def update_elbow_plot(_):
-    fig = go.Figure()
-    
-    # Plot Elbow Method
-    fig.add_trace(go.Scatter(
-        x=list(k_range),
-        y=wcss,
-        mode='lines+markers',
-        name='WCSS',
-        line=dict(color='#3498db')
-    ))
-    
-    # Plot Silhouette Scores
-    fig.add_trace(go.Scatter(
-        x=list(k_range),
-        y=silhouette_scores,
-        mode='lines+markers',
-        name='Silhouette Score',
-        yaxis='y2',
-        line=dict(color='#e74c3c')
-    ))
-    
-    fig.update_layout(
-        title='Método do Cotovelo e Silhouette Score',
-        xaxis_title='Número de Clusters (K)',
-        yaxis_title='WCSS',
-        yaxis2=dict(
-            title='Silhouette Score',
-            overlaying='y',
-            side='right'
-        ),
-        template='plotly_white'
-    )
-    
-    return fig
-
-@app.callback(
-    Output('cluster-feature-plot', 'figure'),
-    Input('cluster-feature-dropdown', 'value')
-)
-def update_cluster_feature_plot(selected_feature):
-    fig = px.box(
-        df, x='Cluster', y=selected_feature,
-        title=f'Distribuição de {selected_feature} por Cluster',
-        color='Cluster',
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    fig.update_layout(template='plotly_white')
-    return fig
-
-@app.callback(
-    Output('cluster-diabetes-plot', 'figure'),
-    Input('cluster-diabetes-plot', 'id')
-)
-def update_cluster_diabetes_plot(_):
-    cluster_diabetes = pd.crosstab(df['Cluster'], df['Diabetes_binary'], normalize='index') * 100
-    cluster_diabetes.columns = ['Não Diabético', 'Diabético']
-    
-    fig = px.bar(
-        cluster_diabetes, 
-        x=cluster_diabetes.index,
-        y=['Não Diabético', 'Diabético'],
-        title='Distribuição de Diabetes por Cluster (%)',
-        barmode='stack',
-        color_discrete_sequence=['#3498db', '#e74c3c']
-    )
-    
-    fig.update_layout(
-        xaxis_title='Cluster',
-        yaxis_title='Proporção (%)',
-        template='plotly_white'
-    )
-    
-    return fig
-
-@app.callback(
-    Output('cluster-stats-table', 'children'),
-    Input('cluster-stats-table', 'id')
-)
-def update_cluster_stats_table(_):
-    # Calcular estatísticas médias por cluster
-    stats_cols = cluster_features + ['Diabetes_binary']
-    cluster_stats = df[stats_cols + ['Cluster']].groupby('Cluster').mean().round(2)
-    
-    # Criar tabela
-    table_header = [html.Tr([html.Th('Cluster')] + [html.Th(col) for col in cluster_stats.columns])]
-    
-    table_rows = []
-    for cluster in cluster_stats.index:
-        row = [html.Td(f'Cluster {cluster}')]
-        for col in cluster_stats.columns:
-            row.append(html.Td(cluster_stats.loc[cluster, col]))
-        table_rows.append(html.Tr(row))
-    
-    table = html.Table(
-        table_header + table_rows,
-        style={'width': '100%', 'borderCollapse': 'collapse', 'marginTop': '10px'}
-    )
-    
-    return [
-        html.P("Esta tabela mostra as características médias de cada cluster:"),
-        table
-    ]
-
-# Callbacks existentes (mantidos da versão anterior)...
-
-# 1. Distribuição da variável alvo
+# Distribuição da variável alvo
 @app.callback(
     Output('target-distribution', 'figure'),
     Input('target-distribution', 'id')
@@ -386,7 +267,7 @@ def update_target_distribution(_):
     
     return fig
 
-# 2. Histograma para variáveis binárias
+# Histograma para variáveis binárias
 @app.callback(
     Output('binary-histogram', 'figure'),
     Input('binary-var-dropdown', 'value')
@@ -427,7 +308,7 @@ def update_binary_histogram(selected_var):
     
     return fig
 
-# 3. Histograma para variáveis numéricas
+# Histograma para variáveis numéricas
 @app.callback(
     Output('numeric-histogram', 'figure'),
     Input('numeric-var-dropdown', 'value')
@@ -467,7 +348,7 @@ def update_numeric_histogram(selected_var):
     
     return fig
 
-# 4. Heatmap de correlação
+# Heatmap de correlação
 @app.callback(
     Output('correlation-heatmap', 'figure'),
     Input('correlation-heatmap', 'id')
@@ -494,7 +375,7 @@ def update_correlation_heatmap(_):
     
     return fig
 
-# 5. Correlação com a variável alvo
+# Correlação com a variável alvo
 @app.callback(
     Output('correlation-with-target', 'figure'),
     Input('correlation-with-target', 'id')
@@ -521,7 +402,7 @@ def update_correlation_with_target(_):
     
     return fig
 
-# 6. Boxplot para análise de outliers
+# Boxplot para análise de outliers
 @app.callback(
     Output('outlier-boxplot', 'figure'),
     Input('outlier-var-dropdown', 'value')
@@ -547,7 +428,7 @@ def update_outlier_boxplot(selected_var):
     
     return fig
 
-# 7. Análise de outliers
+# Análise de outliers
 @app.callback(
     [Output('outlier-analysis', 'figure'),
      Output('outlier-stats', 'children')],
@@ -605,7 +486,125 @@ def update_outlier_analysis(selected_var):
     
     return fig, stats_text
 
-# 8. Métricas do modelo e matriz de confusão
+# Callbacks para clusterização
+@app.callback(
+    Output('cluster-plot', 'figure'),
+    Input('cluster-plot', 'id')
+)
+def update_cluster_plot(_):
+    print("Entrando na clusterização")
+    fig = px.scatter(
+        df, x='PCA1', y='PCA2', color='Cluster',
+        title='Visualização dos Clusters (PCA)',
+        labels={'PCA1': f'Componente Principal 1 ({pca.explained_variance_ratio_[0]:.1%})',
+                'PCA2': f'Componente Principal 2 ({pca.explained_variance_ratio_[1]:.1%})'},
+        color_continuous_scale='viridis'
+    )
+    fig.update_layout(template='plotly_white')
+    return fig
+
+@app.callback(
+    Output('elbow-plot', 'figure'),
+    Input('elbow-plot', 'id')
+)
+def update_elbow_plot(_):
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=list(k_range),
+        y=wcss,
+        mode='lines+markers',
+        name='WCSS',
+        line=dict(color='#3498db')
+    ))
+    fig.add_trace(go.Scatter(
+        x=list(k_range),
+        y=silhouette_scores,
+        mode='lines+markers',
+        name='Silhouette Score',
+        yaxis='y2',
+        line=dict(color='#e74c3c')
+    ))
+    
+    fig.update_layout(
+        title='Método do Cotovelo e Silhouette Score',
+        xaxis_title='Número de Clusters (K)',
+        yaxis_title='WCSS',
+        yaxis2=dict(
+            title='Silhouette Score',
+            overlaying='y',
+            side='right'
+        ),
+        template='plotly_white'
+    )
+    return fig
+
+@app.callback(
+    Output('cluster-feature-plot', 'figure'),
+    Input('cluster-feature-dropdown', 'value')
+)
+def update_cluster_feature_plot(selected_feature):
+    print(f"Atualizando gráfico de distribuição da feature {selected_feature} por cluster")
+    fig = px.box(
+        df, x='Cluster', y=selected_feature,
+        title=f'Distribuição de {selected_feature} por Cluster',
+        color='Cluster',
+        color_discrete_sequence=px.colors.qualitative.Set3
+    )
+    fig.update_layout(template='plotly_white')
+    return fig
+
+@app.callback(
+    Output('cluster-diabetes-plot', 'figure'),
+    Input('cluster-diabetes-plot', 'id')
+)
+def update_cluster_diabetes_plot(_):
+    print("Atualizando gráfico de diabetes por cluster")
+    cluster_diabetes = pd.crosstab(df['Cluster'], df[target], normalize='index') * 100
+    cluster_diabetes.columns = ['Não Diabético', 'Diabético']
+    
+    fig = px.bar(
+        cluster_diabetes,
+        x=cluster_diabetes.index,
+        y=['Não Diabético', 'Diabético'],
+        title='Distribuição de Diabetes por Cluster (%)',
+        barmode='stack',
+        color_discrete_sequence=['#3498db', '#e74c3c']
+    )
+    fig.update_layout(
+        xaxis_title='Cluster',
+        yaxis_title='Proporção (%)',
+        template='plotly_white'
+    )
+    return fig
+
+@app.callback(
+    Output('cluster-stats-table', 'children'),
+    Input('cluster-stats-table', 'id')
+)
+def update_cluster_stats_table(_):
+    stats_cols = cluster_features + [target]
+    cluster_stats = df[stats_cols + ['Cluster']].groupby('Cluster').mean().round(2)
+    
+    table_header = [html.Tr([html.Th('Cluster')] + [html.Th(col) for col in cluster_stats.columns])]
+    table_rows = []
+    for cluster in cluster_stats.index:
+        row = [html.Td(f'Cluster {cluster}')]
+        for col in cluster_stats.columns:
+            row.append(html.Td(cluster_stats.loc[cluster, col]))
+        table_rows.append(html.Tr(row))
+    
+    table = html.Table(
+        table_header + table_rows,
+        style={'width': '100%', 'borderCollapse': 'collapse', 'marginTop': '10px'}
+    )
+    
+    return [
+        html.P("Esta tabela mostra as características médias de cada cluster:"),
+        table
+    ]
+
+# Métricas do modelo e matriz de confusão
 @app.callback(
     [Output('model-metrics', 'children'),
      Output('confusion-matrix', 'figure')],
@@ -629,7 +628,7 @@ def update_model_metrics(_):
     f1 = f1_score(y_test, y_pred, zero_division=0)
     roc_auc = roc_auc_score(y_test, y_pred_proba)
     
-    cm = confusion_matrix(y_test, y_pred, labels=[0, 1])
+    cm = confusion_matrix(y_test, y_pred, labels=[0,1])
     cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
     
     fig = px.imshow(
@@ -640,7 +639,6 @@ def update_model_metrics(_):
         x=['Não Diabético', 'Diabético'],
         y=['Não Diabético', 'Diabético']
     )
-    
     fig.update_layout(
         title='Matriz de Confusão (Normalizada)',
         xaxis_title='Rótulo Previsto',
@@ -652,7 +650,7 @@ def update_model_metrics(_):
         html.P(f"Acurácia: {accuracy:.2%}"),
         html.P(f"Precisão: {precision:.2%}"),
         html.P(f"Recall: {recall:.2%}"),
-        html.P(f"F1-Score: {f1:.2%}"),
+        html.P(f"F1‑Score: {f1:.2%}"),
         html.P(f"ROC AUC: {roc_auc:.2%}"),
         html.Hr(),
         html.P("O modelo foi treinado com 90% dos dados e testado com 10%."),
