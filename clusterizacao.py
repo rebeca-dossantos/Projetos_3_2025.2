@@ -115,16 +115,33 @@ app.layout = html.Div([
         html.H2("2. Análise de Clusterização", style={'color': '#3498db', 'borderBottom': '2px solid #3498db', 'paddingBottom': 10}),
         
         html.Div([
-            html.Div([
-                html.H4("Visualização dos Clusters (PCA)"),
-                dcc.Graph(id='cluster-plot')
-            ], className="six columns"),
             
             html.Div([
                 html.H4("Análise do Número Ótimo de Clusters"),
                 dcc.Graph(id='elbow-plot')
             ], className="six columns"),
         ], className="row"),
+
+html.Div([
+    html.Label("Número de Clusters (K):", style={'fontWeight': 'bold'}),
+    dcc.Slider(
+        id='k-slider',
+        min=2, 
+        max=25, 
+        step=1, 
+        value=20, # Valor inicial
+        marks={i: str(i) for i in range(2, 26)}
+    ),
+], style={'padding': '20px', 'backgroundColor': '#f9f9f9', 'marginBottom': '20px'}),
+
+
+
+
+
+        html.Div([
+                html.H4("Visualização dos Clusters (PCA)"),
+                dcc.Graph(id='cluster-plot')
+            ], className="six columns"),
         
         html.Div([
             html.Div([
@@ -487,21 +504,6 @@ def update_outlier_analysis(selected_var):
     return fig, stats_text
 
 # Callbacks para clusterização
-@app.callback(
-    Output('cluster-plot', 'figure'),
-    Input('cluster-plot', 'id')
-)
-def update_cluster_plot(_):
-    print("Entrando na clusterização")
-    fig = px.scatter(
-        df, x='PCA1', y='PCA2', color='Cluster',
-        title='Visualização dos Clusters (PCA)',
-        labels={'PCA1': f'Componente Principal 1 ({pca.explained_variance_ratio_[0]:.1%})',
-                'PCA2': f'Componente Principal 2 ({pca.explained_variance_ratio_[1]:.1%})'},
-        color_continuous_scale='viridis'
-    )
-    fig.update_layout(template='plotly_white')
-    return fig
 
 @app.callback(
     Output('elbow-plot', 'figure'),
@@ -539,70 +541,68 @@ def update_elbow_plot(_):
     )
     return fig
 
+# --- CALLBACK UNIFICADO DE CLUSTERIZAÇÃO ---
 @app.callback(
-    Output('cluster-feature-plot', 'figure'),
-    Input('cluster-feature-dropdown', 'value')
+    [Output('cluster-plot', 'figure'),              # Gráfico do Mapa (PCA)
+     Output('cluster-diabetes-plot', 'figure'),     # Gráfico de Barras
+     Output('cluster-feature-plot', 'figure'),      # Gráfico Boxplot
+     Output('cluster-stats-table', 'children')],    # Tabela de estatísticas
+    [Input('k-slider', 'value'),                    # O valor do SLIDER
+     Input('cluster-feature-dropdown', 'value')]    # O valor do Dropdown de features
 )
-def update_cluster_feature_plot(selected_feature):
-    print(f"Atualizando gráfico de distribuição da feature {selected_feature} por cluster")
-    fig = px.box(
-        df, x='Cluster', y=selected_feature,
-        title=f'Distribuição de {selected_feature} por Cluster',
-        color='Cluster',
-        color_discrete_sequence=px.colors.qualitative.Set3
-    )
-    fig.update_layout(template='plotly_white')
-    return fig
-
-@app.callback(
-    Output('cluster-diabetes-plot', 'figure'),
-    Input('cluster-diabetes-plot', 'id')
-)
-def update_cluster_diabetes_plot(_):
-    print("Atualizando gráfico de diabetes por cluster")
-    cluster_diabetes = pd.crosstab(df['Cluster'], df[target], normalize='index') * 100
-    cluster_diabetes.columns = ['Não Diabético', 'Diabético']
+def update_cluster_graphs(k_value, feature_selected):
+    # 1. Configuração Global (Garante que PCA e Scaler existam)
+    cluster_cols = ['BMI', 'Age', 'GenHlth', 'PhysHlth', 'MentHlth', 'HighBP', 'HighChol']
     
-    fig = px.bar(
-        cluster_diabetes,
-        x=cluster_diabetes.index,
-        y=['Não Diabético', 'Diabético'],
-        title='Distribuição de Diabetes por Cluster (%)',
-        barmode='stack',
+    # Recalcula X_scaled se necessário (segurança)
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(df[cluster_cols])
+
+    # 2. RODA O K-MEANS COM O VALOR DO SLIDER
+    kmeans = KMeans(n_clusters=k_value, random_state=42, n_init=10)
+    df_temp = df.copy()
+    df_temp['Cluster'] = kmeans.fit_predict(X_scaled)
+    df_temp['Cluster'] = df_temp['Cluster'].astype(str) # Transforma em texto
+
+    # 3. GERA OS GRÁFICOS (Tudo de uma vez)
+    
+    # Gráfico 1: Mapa (PCA)
+    fig_pca = px.scatter(
+        df_temp, x='PCA1', y='PCA2', color='Cluster',
+        title=f'Mapa dos Clusters (K={k_value})',
+        template='plotly_white',
+        color_discrete_sequence=px.colors.qualitative.Bold
+    )
+
+    # Gráfico 2: Diabetes
+    ct = pd.crosstab(df_temp['Cluster'], df_temp[target], normalize='index') * 100
+    ct.columns = ['Não Diabético', 'Diabético']
+    fig_diab = px.bar(
+        ct, barmode='group',
+        title='Proporção de Diabetes por Cluster',
+        labels={'value': '%', 'Cluster': 'Grupo'},
         color_discrete_sequence=['#3498db', '#e74c3c']
     )
-    fig.update_layout(
-        xaxis_title='Cluster',
-        yaxis_title='Proporção (%)',
+
+    # Gráfico 3: Feature (Boxplot)
+    fig_feat = px.box(
+        df_temp, x='Cluster', y=feature_selected, color='Cluster',
+        title=f'Distribuição de {feature_selected}',
         template='plotly_white'
     )
-    return fig
 
-@app.callback(
-    Output('cluster-stats-table', 'children'),
-    Input('cluster-stats-table', 'id')
-)
-def update_cluster_stats_table(_):
-    stats_cols = cluster_features + [target]
-    cluster_stats = df[stats_cols + ['Cluster']].groupby('Cluster').mean().round(2)
+    # 4. GERA A TABELA
+    stats = df_temp.groupby('Cluster')[cluster_cols].mean().round(2)
+    header = [html.Tr([html.Th('Cluster')] + [html.Th(col) for col in stats.columns])]
+    rows = []
+    for cluster in stats.index:
+        row_cells = [html.Td(cluster)] + [html.Td(stats.loc[cluster, col]) for col in stats.columns]
+        rows.append(html.Tr(row_cells))
     
-    table_header = [html.Tr([html.Th('Cluster')] + [html.Th(col) for col in cluster_stats.columns])]
-    table_rows = []
-    for cluster in cluster_stats.index:
-        row = [html.Td(f'Cluster {cluster}')]
-        for col in cluster_stats.columns:
-            row.append(html.Td(cluster_stats.loc[cluster, col]))
-        table_rows.append(html.Tr(row))
-    
-    table = html.Table(
-        table_header + table_rows,
-        style={'width': '100%', 'borderCollapse': 'collapse', 'marginTop': '10px'}
-    )
-    
-    return [
-        html.P("Esta tabela mostra as características médias de cada cluster:"),
-        table
-    ]
+    table_element = html.Table(header + rows, style={'width': '100%', 'textAlign': 'center', 'border': '1px solid #ddd'})
+
+    return fig_pca, fig_diab, fig_feat, table_element
 
 # Métricas do modelo e matriz de confusão
 @app.callback(
