@@ -127,10 +127,10 @@ html.Div([
     dcc.Slider(
         id='k-slider',
         min=2, 
-        max=25, 
+        max=20, 
         step=1, 
         value=20, # Valor inicial
-        marks={i: str(i) for i in range(2, 26)}
+        marks={i: str(i) for i in range(2, 21)}
     ),
 ], style={'padding': '20px', 'backgroundColor': '#f9f9f9', 'marginBottom': '20px'}),
 
