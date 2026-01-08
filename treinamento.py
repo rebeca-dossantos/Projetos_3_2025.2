@@ -6,6 +6,7 @@ from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.naive_bayes import GaussianNB
 # --- Importar Métricas e a Matriz de Confusão ---
 from sklearn.metrics import (
     classification_report, accuracy_score, precision_score, 
@@ -47,7 +48,8 @@ print("\n--- Iniciando Comparação de Modelos ---")
 models = {
     'Regressão Logística': LogisticRegression(random_state=42, max_iter=1000),
     'Random Forest': RandomForestClassifier(random_state=42),
-    'Gradient Boosting': GradientBoostingClassifier(random_state=42)
+    'Gradient Boosting': GradientBoostingClassifier(random_state=42),
+    'Naive Bayes': GaussianNB()
 }
 results = []
 
