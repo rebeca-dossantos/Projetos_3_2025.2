@@ -10,7 +10,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, silhouette_samples
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -115,35 +115,43 @@ app.layout = html.Div([
         html.H2("2. Análise de Clusterização", style={'color': '#3498db', 'borderBottom': '2px solid #3498db', 'paddingBottom': 10}),
         
         html.Div([
-            
             html.Div([
                 html.H4("Análise do Número Ótimo de Clusters"),
                 dcc.Graph(id='elbow-plot')
             ], className="six columns"),
+            
+            # NOVO: Gráfico de Silhueta Detalhado
+            html.Div([
+                html.H4("Gráfico de Silhueta Detalhado"),
+                html.Label("Selecione K para visualizar silhueta:"),
+                dcc.Dropdown(
+                    id='silhouette-k-dropdown',
+                    options=[{'label': f'K = {i}', 'value': i} for i in range(2, 21)],
+                    value=5,
+                    style={'width': '200px', 'marginBottom': '10px'}
+                ),
+                dcc.Graph(id='silhouette-plot')
+            ], className="six columns"),
         ], className="row"),
 
-html.Div([
-    html.Label("Número de Clusters (K):", style={'fontWeight': 'bold'}),
-    dcc.Slider(
-        id='k-slider',
-        min=2, 
-        max=20, 
-        step=1, 
-        value=20, # Valor inicial
-        marks={i: str(i) for i in range(2, 21)}
-    ),
-], style={'padding': '20px', 'backgroundColor': '#f9f9f9', 'marginBottom': '20px'}),
-
-
-
-
+        html.Div([
+            html.Label("Número de Clusters (K):", style={'fontWeight': 'bold'}),
+            dcc.Slider(
+                id='k-slider',
+                min=2, 
+                max=20, 
+                step=1, 
+                value=20, # Valor inicial
+                marks={i: str(i) for i in range(2, 21)}
+            ),
+        ], style={'padding': '20px', 'backgroundColor': '#f9f9f9', 'marginBottom': '20px'}),
 
         html.Div([
+            html.Div([
                 html.H4("Visualização dos Clusters (PCA)"),
                 dcc.Graph(id='cluster-plot')
             ], className="six columns"),
-        
-        html.Div([
+            
             html.Div([
                 html.H4("Características dos Clusters"),
                 dcc.Dropdown(
@@ -153,10 +161,18 @@ html.Div([
                 ),
                 dcc.Graph(id='cluster-feature-plot')
             ], className="six columns"),
-            
+        ], className="row"),
+        
+        html.Div([
             html.Div([
                 html.H4("Composição dos Clusters por Diabetes"),
                 dcc.Graph(id='cluster-diabetes-plot')
+            ], className="six columns"),
+            
+            # NOVO: Distribuição dos Scores de Silhueta
+            html.Div([
+                html.H4("Distribuição dos Scores de Silhueta (K=20)"),
+                dcc.Graph(id='silhouette-distribution')
             ], className="six columns"),
         ], className="row"),
         
@@ -539,6 +555,122 @@ def update_elbow_plot(_):
         ),
         template='plotly_white'
     )
+    return fig
+
+# Gráfico de Silhueta
+@app.callback(
+    Output('silhouette-plot', 'figure'),
+    Input('silhouette-k-dropdown', 'value')
+)
+def update_silhouette_plot(k_value):
+    # Calcular KMeans para o K selecionado na amostra
+    kmeans = KMeans(n_clusters=k_value, random_state=42, n_init=10)
+    cluster_labels = kmeans.fit_predict(X_sampled)
+    silhouette_vals = silhouette_samples(X_sampled, cluster_labels)
+    avg_silhouette = silhouette_vals.mean()
+    
+    fig = go.Figure()
+    
+    y_lower = 10
+    colors = px.colors.qualitative.Set3
+    
+    for i in range(k_value):
+        # Valores de silhueta para o cluster i
+        ith_cluster_silhouette_vals = silhouette_vals[cluster_labels == i]
+        ith_cluster_silhouette_vals.sort()
+        
+        size_cluster_i = ith_cluster_silhouette_vals.shape[0]
+        y_upper = y_lower + size_cluster_i
+        
+        # Adicionar trace para cada cluster
+        fig.add_trace(go.Scatter(
+            x=ith_cluster_silhouette_vals,
+            y=np.arange(y_lower, y_upper),
+            mode='lines',
+            name=f'Cluster {i}',
+            fill='tozerox',
+            line=dict(width=0.5, color=colors[i % len(colors)]),
+            fillcolor=colors[i % len(colors)],
+            opacity=0.7
+        ))
+        
+        # Adicionar anotação com número do cluster
+        fig.add_annotation(
+            x=-0.05,
+            y=y_lower + 0.5 * size_cluster_i,
+            text=str(i),
+            showarrow=False,
+            xanchor='right',
+            font=dict(size=12, color='black')
+        )
+        
+        y_lower = y_upper + 10  # Espaço entre clusters
+    
+    # Linha vertical para o silhouette score médio
+    fig.add_vline(
+        x=avg_silhouette,
+        line_dash="dash",
+        line_color="red",
+        line_width=2,
+        annotation_text=f"Média: {avg_silhouette:.3f}",
+        annotation_position="top right"
+    )
+    
+    fig.update_layout(
+        title=f'Gráfico de Silhueta para K = {k_value}',
+        xaxis_title='Coeficiente de Silhueta',
+        yaxis_title='Clusters',
+        xaxis=dict(range=[-0.1, 1]),
+        showlegend=True,
+        template='plotly_white',
+        height=500,
+        hovermode="closest"
+    )
+    
+    return fig
+
+# Distribuição dos scores de silhueta
+@app.callback(
+    Output('silhouette-distribution', 'figure'),
+    Input('silhouette-distribution', 'id')
+)
+def update_silhouette_distribution(_):
+    # Usar K=20 para a distribuição final
+    kmeans_final = KMeans(n_clusters=20, random_state=42, n_init=10)
+    cluster_labels = kmeans_final.fit_predict(X_sampled)
+    silhouette_vals = silhouette_samples(X_sampled, cluster_labels)
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Histogram(
+        x=silhouette_vals,
+        nbinsx=50,
+        name='Scores de Silhueta',
+        marker_color='#3498db',
+        opacity=0.7,
+        hovertemplate='Score: %{x:.3f}<br>Frequência: %{y}<extra></extra>'
+    ))
+    
+    # Adicionar linha vertical para média
+    avg_silhouette = silhouette_vals.mean()
+    fig.add_vline(
+        x=avg_silhouette,
+        line_dash="dash",
+        line_color="red",
+        annotation_text=f"Média: {avg_silhouette:.3f}",
+        annotation_position="top right"
+    )
+    
+    # Adicionar estatísticas no título
+    stats_text = f"Min: {silhouette_vals.min():.3f} | Max: {silhouette_vals.max():.3f} | Std: {silhouette_vals.std():.3f}"
+    
+    fig.update_layout(
+        title=f'Distribuição dos Scores de Silhueta (K=20)<br><sub>{stats_text}</sub>',
+        xaxis_title='Coeficiente de Silhueta',
+        yaxis_title='Frequência',
+        template='plotly_white'
+    )
+    
     return fig
 
 # --- CALLBACK UNIFICADO DE CLUSTERIZAÇÃO ---
