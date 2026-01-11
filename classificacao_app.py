@@ -11,33 +11,37 @@ import io
 import base64
 import matplotlib.pyplot as plt
 import matplotlib
+# --- NOVA IMPORTAÇÃO ---
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import confusion_matrix, accuracy_score
+# -----------------------
+
 matplotlib.use('Agg')
 
 warnings.filterwarnings('ignore')
 
-# --- 1. CARREGAR MODELO E DADOS ---
+# --- 1. CARREGAR MODELO PRINCIPAL E DADOS ---
 print(">>> Carregando modelo 'modelo_classificacao.joblib'...")
+# Este continua sendo o modelo principal para as explicações SHAP
 pipeline = joblib.load('assets/modelo_classificacao.joblib')
 model = pipeline.named_steps['model']
 scaler = pipeline.named_steps['scaler']
 print(">>> Modelo carregado.")
 
-# --- CARREGAR MÉTRICAS DE COMPARAÇÃO ---
+# --- CARREGAR MÉTRICAS DE COMPARAÇÃO EXISTENTES ---
 print(">>> Carregando métricas de 'model_comparison_metrics.csv'...")
 try:
     df_metrics = pd.read_csv('assets/model_comparison_metrics.csv')
-    model_options = [{'label': model, 'value': model} for model in df_metrics['Modelo'].unique()]
 except Exception as e:
     print(f"Aviso: Não foi possível carregar 'model_comparison_metrics.csv'. {e}")
     df_metrics = pd.DataFrame(columns=['Modelo', 'Acurácia', 'TN', 'FP', 'FN', 'TP'])
-    model_options = []
 
-
-# --- 2. PREPARAR DADOS PARA O SHAP GLOBAL ---
-print(">>> Preparando dados para o SHAP Global...")
+# --- 2. PREPARAR DADOS ---
+print(">>> Preparando dados...")
 df = pd.read_csv('database.csv')
 df = df.rename(columns={'Diabetes_012': 'Diabetes_binary'})
 df['Diabetes_binary'] = df['Diabetes_binary'].replace({2: 1})
+
 def winsorize_iqr(df, col, k=1.5):
     Q1 = df[col].quantile(0.25)
     Q3 = df[col].quantile(0.75)
@@ -45,23 +49,58 @@ def winsorize_iqr(df, col, k=1.5):
     lower_bound = Q1 - k * IQR
     upper_bound = Q3 + k * IQR
     return df[col].clip(lower=lower_bound, upper=upper_bound)
+
 df['BMI'] = winsorize_iqr(df, 'BMI')
 features = [col for col in df.columns if col not in ['Diabetes_binary', 'Cluster', 'PCA1', 'PCA2']]
 target = 'Diabetes_binary'
 X = df[features]
 y = df[target]
+
 from sklearn.model_selection import train_test_split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+# Prepara dados escalados para o modelo principal (Tree/Forest)
 X_test_scaled = scaler.transform(X_test)
 X_test_scaled_df = pd.DataFrame(X_test_scaled, columns=features)
 
-# --- NOVO: Listas de colunas e Dicionário de Tradução ---
-# Separação correta dos tipos de input
+# --- NOVO: TREINAR E AVALIAR NAIVE BAYES ---
+print(">>> Treinando modelo Naive Bayes para comparação...")
+try:
+    # Instancia e treina o Naive Bayes (GaussianNB funciona bem com dados contínuos)
+    nb_model = GaussianNB()
+    nb_model.fit(X_train, y_train) # Treina com dados brutos (ou poderia usar scaled)
+    
+    # Previsões
+    y_pred_nb = nb_model.predict(X_test)
+    
+    # Métricas
+    acc_nb = accuracy_score(y_test, y_pred_nb)
+    tn_nb, fp_nb, fn_nb, tp_nb = confusion_matrix(y_test, y_pred_nb).ravel()
+    
+    # Adicionar ao DataFrame de métricas (em memória)
+    new_row = {
+        'Modelo': 'Naive Bayes',
+        'Acurácia': round(acc_nb, 4),
+        'TN': tn_nb, 'FP': fp_nb, 'FN': fn_nb, 'TP': tp_nb
+    }
+    
+    # Verifica se já existe para não duplicar se rodar múltiplas vezes
+    if 'Naive Bayes' not in df_metrics['Modelo'].values:
+        df_metrics = pd.concat([df_metrics, pd.DataFrame([new_row])], ignore_index=True)
+        print(">>> Naive Bayes adicionado às métricas.")
+    
+except Exception as e:
+    print(f"Erro ao treinar Naive Bayes: {e}")
+
+# Atualiza as opções do Dropdown com o novo modelo incluído
+model_options = [{'label': m, 'value': m} for m in df_metrics['Modelo'].unique()]
+# ---------------------------------------------
+
+# Listas de colunas e Dicionário de Tradução
 float_cols = ['BMI']
 integer_cols = ['GenHlth', 'MentHlth', 'PhysHlth', 'Age', 'Education', 'Income']
 binary_cols = [col for col in features if col not in float_cols and col not in integer_cols]
 
-# Dicionário para traduzir os nomes
 feature_name_map = {
     'BMI': 'IMC (ex: 28.5)',
     'GenHlth': 'Saúde Geral (1=Excelente, 5=Ruim)',
@@ -85,10 +124,8 @@ feature_name_map = {
     'DiffWalk': 'Dificuldade de Andar',
     'Sex': 'Sexo (0=F, 1=M)',
 }
-# --- FIM DA NOVIDADE ---
 
-
-print(">>> Calculando SHAP values globais...")
+print(">>> Calculando SHAP values globais (Modelo Principal)...")
 explainer = shap.TreeExplainer(model)
 shap_values_global_raw = explainer.shap_values(X_test_scaled_df)
 if isinstance(shap_values_global_raw, list) and len(shap_values_global_raw) == 2:
@@ -98,7 +135,7 @@ else:
 print(">>> SHAP Global calculado.")
 
 
-# --- 3. FUNÇÃO DE LAYOUT (MODIFICADA) ---
+# --- 3. FUNÇÃO DE LAYOUT ---
 def create_input_fields(features_list):
     campos = []
     
@@ -107,7 +144,6 @@ def create_input_fields(features_list):
         {'label': 'Sim', 'value': 1}
     ]
     
-    # --- NOVO: Propriedades dos campos de Inteiro ---
     int_field_props = {
         'GenHlth': {'min': 1, 'max': 5, 'step': 1},
         'MentHlth': {'min': 0, 'max': 30, 'step': 1},
@@ -123,29 +159,26 @@ def create_input_fields(features_list):
         input_component = None
         
         if col in float_cols:
-            # --- TIPO 1: FLOAT (só o IMC) ---
             input_component = dcc.Input(
                 id={'type': 'input-local', 'index': col},
                 type='number',
-                value=round(default_value, 2), # Aceita decimal
+                value=round(default_value, 2),
                 style={'width': '100px'}
             )
             
         elif col in integer_cols:
-            # --- TIPO 2: INTEIRO (Idade, Renda, etc.) ---
-            props = int_field_props[col] # Pega min/max/step
+            props = int_field_props[col]
             input_component = dcc.Input(
                 id={'type': 'input-local', 'index': col},
                 type='number',
-                value=int(round(default_value)), # Valor inicial é inteiro
+                value=int(round(default_value)),
                 min=props['min'],
                 max=props['max'],
-                step=props['step'], # step=1 força a ser inteiro
+                step=props['step'],
                 style={'width': '100px'}
             )
             
         else:
-            # --- TIPO 3: BINÁRIO (Sim/Não) ---
             default_binary_value = int(round(default_value)) 
             input_component = dcc.Dropdown(
                 id={'type': 'input-local', 'index': col},
@@ -163,7 +196,6 @@ def create_input_fields(features_list):
         )
         
     return html.Div(campos)
-# --- FIM DA FUNÇÃO MODIFICADA ---
 
 
 # --- 4. INICIALIZAR O APP DASH ---
@@ -172,7 +204,7 @@ server = app.server
 
 # --- 5. LAYOUT DO APP ---
 app.layout = html.Div([
-    html.H1("Classificação", style={'textAlign': 'center'}),
+    html.H1("Classificação de Diabetes", style={'textAlign': 'center'}),
     
     dcc.Tabs(id="tabs-main", value='tab-1', children=[
         
@@ -181,8 +213,8 @@ app.layout = html.Div([
             html.Div([
                 html.H3("Preencha os dados do paciente:", style={'marginTop': '20px'}),
                 html.P("Os valores estão pré-preenchidos com a média do dataset de teste."),
-                create_input_fields(features), # Chama a nova função
-                html.Button('Fazer Previsão', id='btn-prever', n_clicks=0, 
+                create_input_fields(features),
+                html.Button('Fazer Previsão (Modelo Principal)', id='btn-prever', n_clicks=0, 
                             style={'marginTop': '20px', 'fontSize': '16px', 'padding': '10px'}),
                 html.Hr(),
                 html.H2("Resultado da Predição:", style={'color': '#007BFF'}),
@@ -199,13 +231,10 @@ app.layout = html.Div([
         dcc.Tab(label='Explicações Globais', value='tab-2', children=[
             html.Div([
                 html.H3("Importância Geral das Features (SHAP - Gráfico de Barras)", style={'marginTop': '20px'}),
-                html.P("Gráfico de barras mostrando o impacto médio de cada feature nas previsões (para a classe 'Risco de Diabetes')."),
+                html.P("Gráfico de barras mostrando o impacto médio de cada feature nas previsões (Modelo Principal)."),
                 dcc.Graph(id='shap-global-bar-plot'),
                 html.Hr(style={'margin': '40px 0'}),
                 html.H3("Distribuição do Impacto (SHAP - Beeswarm Plot)", style={'marginTop': '20px'}),
-                html.P("Mostra o impacto de cada feature para cada ponto do dataset de teste."),
-                html.P("Pontos vermelhos = Valor alto da feature (ex: Idade alta). Pontos azuis = Valor baixo."),
-                html.P("Eixo X = Impacto no modelo (positivo aumenta o risco, negativo diminui)."),
                 html.Img(id='shap-global-beeswarm-plot', style={'width': '60%', 'maxWidth': '700px', 'margin': 'auto', 'display': 'block'})
             ], style={'padding': '20px'})
         ]),
@@ -214,7 +243,7 @@ app.layout = html.Div([
         dcc.Tab(label='Comparação de Modelos', value='tab-3', children=[
             html.Div([
                 html.H3("Matriz de Confusão por Modelo", style={'marginTop': '20px'}),
-                html.P("Veja quantas vezes cada modelo acertou (diagonal principal) e errou (fora da diagonal)."),
+                html.P("Compare o desempenho do modelo carregado versus o Naive Bayes."),
                 html.Div([
                     html.Label("Selecione um Modelo:", style={'fontWeight': 'bold'}),
                     dcc.Dropdown(
@@ -252,8 +281,6 @@ app.layout = html.Div([
 
 # --- 6. CALLBACKS ---
 
-# Callback para a PREDIÇÃO LOCAL e SHAP LOCAL
-# (NÃO PRECISA MUDAR)
 @app.callback(
     [Output('output-previsao', 'children'),
      Output('shap-local-plot', 'srcDoc')],
@@ -266,7 +293,6 @@ def update_local_prediction(n_clicks, values, ids):
     if n_clicks == 0:
         return "", ""
         
-    # Checar se algum valor é nulo (pode acontecer se o usuário apagar um campo)
     if any(v is None for v in values):
         return html.Span("Erro: Todos os campos devem ser preenchidos.", style={'color': 'red'}), ""
         
@@ -275,6 +301,7 @@ def update_local_prediction(n_clicks, values, ids):
             
     input_scaled = scaler.transform(input_df)
     
+    # Usa o pipeline principal (Random Forest/XGBoost) para predição
     prob_diabetes = pipeline.predict_proba(input_scaled)[0][1]
     
     if prob_diabetes > 0.5:
@@ -300,7 +327,6 @@ def update_local_prediction(n_clicks, values, ids):
         expected_value_local = explainer.expected_value
     
     try:
-        # Gerar o force plot
         force_plot = shap.force_plot(
             expected_value_local,
             shap_values_local,
@@ -308,7 +334,6 @@ def update_local_prediction(n_clicks, values, ids):
             matplotlib=False
         )
         
-        # Converter para HTML com o JavaScript necessário
         shap_html = f"""
         <html>
         <head>
@@ -327,7 +352,6 @@ def update_local_prediction(n_clicks, values, ids):
     return resultado_texto, shap_html
 
 
-# Callback para o SHAP GLOBAL (Corrigido)
 @app.callback(
     [Output('shap-global-bar-plot', 'figure'),
      Output('shap-global-beeswarm-plot', 'src')],
@@ -356,7 +380,7 @@ def update_global_shap_plot(tab_value):
         
         shap.summary_plot(
             shap_values_global_class1, 
-            X_test, # Correção: Usar X_test original
+            X_test, 
             show=False,
             max_display=15 
         )
@@ -374,7 +398,6 @@ def update_global_shap_plot(tab_value):
     return go.Figure(), ""
 
 
-# --- NOVO CALLBACK: GRÁFICO DE MATRIZ DE CONFUSÃO ---
 @app.callback(
     Output('confusion-matrix-graph', 'figure'),
     [Input('tabs-main', 'value'),
@@ -382,6 +405,7 @@ def update_global_shap_plot(tab_value):
 )
 def update_confusion_matrix_graph(tab_value, selected_model):
     if tab_value == 'tab-3' and selected_model:
+        # Busca as métricas no DataFrame (agora incluindo Naive Bayes)
         model_data = df_metrics[df_metrics['Modelo'] == selected_model].iloc[0]
         
         tn = model_data['TN']
@@ -390,8 +414,10 @@ def update_confusion_matrix_graph(tab_value, selected_model):
         tp = model_data['TP']
         
         z = [[tn, fp], [fn, tp]]
-        x_labels = ['Previsto: Não Diabético (0)', 'Previsto: Risco (1)']
-        y_labels = ['Real: Não Diabético (0)', 'Real: Risco (1)']
+        x_labels = ['Previsto: Não (0)', 'Previsto: Sim (1)']
+        y_labels = ['Real: Não (0)', 'Real: Sim (1)']
+        
+        acc = model_data.get('Acurácia', 0)
         
         fig = px.imshow(
             z,
@@ -399,17 +425,16 @@ def update_confusion_matrix_graph(tab_value, selected_model):
             y=y_labels,
             text_auto=True,
             color_continuous_scale='Blues',
-            title=f"Matriz de Confusão - {selected_model}"
+            title=f"Matriz de Confusão - {selected_model} (Acurácia: {acc:.2%})"
         )
         
         fig.update_layout(
-            xaxis_title="Valores Previstos pelo Modelo",
-            yaxis_title="Valores Reais (Verdadeiros)"
+            xaxis_title="Valores Previstos",
+            yaxis_title="Valores Reais"
         )
         return fig
     
     return go.Figure()
 
-# --- 7. RODAR O APP ---
 if __name__ == '__main__':
     app.run(debug=True, port=8052)
